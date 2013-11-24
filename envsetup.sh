@@ -644,7 +644,7 @@ function tapas()
 function eat()
 {
     if [ "$OUT" ] ; then
-        MODVERSION=`sed -n -e'/ro\.aokp\.version/s/^.*=//p' $OUT/system/build.prop`
+        MODVERSION=`sed -n -e'/ro\.iokp\.version/s/^.*=//p' $OUT/system/build.prop`
         ZIPFILE=$MODVERSION.zip
         ZIPPATH=$OUT/$ZIPFILE
         if [ ! -f $ZIPPATH ] ; then
