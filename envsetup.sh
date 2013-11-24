@@ -9,17 +9,18 @@ Invoke ". build/envsetup.sh" from your shell to add the following functions to y
 - mm:       Builds all of the modules in the current directory.
 - mmm:      Builds all of the modules in the supplied directories.
 - cgrep:    Greps on all local C/C++ files.
+- mgrep:    Greps on all local Makefiles.
 - jgrep:    Greps on all local Java files.
 - resgrep:  Greps on all local res/*.xml files.
 - godir:    Go to the directory containing a file.
 - mka:      Builds using SCHED_BATCH on all processors
 - mbot:     Builds for all devices using the psuedo buildbot
 - mkapush:  Same as mka with the addition of adb pushing to the device.
-- pstest:   cherry pick a patch from the IOKP gerrit instance.
-- pspush:   push commit to IOKP gerrit instance.
+- pstest:   cherry pick a patch from the AOKP gerrit instance.
+- pspush:   push commit to AOKP gerrit instance.
 - taco:     Builds for a single device using the pseudo buildbot
 - reposync: Parallel repo sync using ionice and SCHED_BATCH
-
+- addaosp:  Add git remote for the AOSP repository
 Look at the source to view more functions. The complete list is:
 EOF
     T=$(gettop)
@@ -64,12 +65,12 @@ function check_product()
         return
     fi
 
-    if (echo -n $1 | grep -q -e "^iokp_") ; then
-       IOKP_PRODUCT=$(echo -n $1 | sed -e 's/^iokp_//g')
+    if (echo -n $1 | grep -q -e "^aokp_") ; then
+       AOKP_PRODUCT=$(echo -n $1 | sed -e 's/^aokp_//g')
     else
-       IOKP_PRODUCT=
+       AOKP_PRODUCT=
     fi
-      export IOKP_PRODUCT
+      export AOKP_PRODUCT
 
     CALLED_FROM_SETUP=true BUILD_SYSTEM=build/core \
         TARGET_PRODUCT=$1 \
@@ -451,7 +452,7 @@ function print_lunch_menu()
     echo
     echo "You're building on" $uname
     echo
-    if [ "z${IOKP_DEVICES_ONLY}" != "z" ]; then
+    if [ "z${AOKP_DEVICES_ONLY}" != "z" ]; then
        echo "Breakfast menu... pick a combo:"
     else
        echo "Lunch menu... pick a combo:"
@@ -465,7 +466,7 @@ function print_lunch_menu()
         i=$(($i+1))
     done
 
-    if [ "z${IOKP_DEVICES_ONLY}" != "z" ]; then
+    if [ "z${AOKP_DEVICES_ONLY}" != "z" ]; then
        echo "... and don't forget the bacon!"
     fi
 
@@ -487,10 +488,10 @@ function brunch()
 function breakfast()
 {
     target=$1
-    IOKP_DEVICES_ONLY="true"
+    AOKP_DEVICES_ONLY="true"
     unset LUNCH_MENU_CHOICES
     add_lunch_combo full-eng
-    for f in `/bin/ls vendor/iokp/vendorsetup.sh 2> /dev/null`
+    for f in `/bin/ls vendor/aokp/vendorsetup.sh 2> /dev/null`
         do
             echo "including $f"
             . $f
@@ -506,8 +507,8 @@ function breakfast()
             # A buildtype was specified, assume a full device name
             lunch $target
         else
-            # This is probably just the IOKP model name
-            lunch iokp_$target-userdebug
+            # This is probably just the AOKP model name
+            lunch aokp_$target-userdebug
         fi
     fi
     return $?
@@ -643,7 +644,7 @@ function tapas()
 function eat()
 {
     if [ "$OUT" ] ; then
-        MODVERSION=`sed -n -e'/ro\.iokp\.version/s/^.*=//p' $OUT/system/build.prop`
+        MODVERSION=`sed -n -e'/ro\.aokp\.version/s/^.*=//p' $OUT/system/build.prop`
         ZIPFILE=$MODVERSION.zip
         ZIPPATH=$OUT/$ZIPFILE
         if [ ! -f $ZIPPATH ] ; then
@@ -740,6 +741,9 @@ function mm()
         # Find the closest Android.mk file.
         T=$(gettop)
         local M=$(findmakefile)
+        local MODULES=
+        local GET_INSTALL_PATH=
+        local ARGS=
         # Remove the path to top as the makefilepath needs to be relative
         local M=`echo $M|sed 's:'$T'/::'`
         if [ ! "$T" ]; then
@@ -747,7 +751,19 @@ function mm()
         elif [ ! "$M" ]; then
             echo "Couldn't locate a makefile from the current directory."
         else
-            ONE_SHOT_MAKEFILE=$M make -C $T -f build/core/main.mk all_modules $@
+            for ARG in $@; do
+                case $ARG in
+                  GET-INSTALL-PATH) GET_INSTALL_PATH=$ARG;;
+                esac
+            done
+            if [ -n "$GET_INSTALL_PATH" ]; then
+              MODULES=
+              ARGS=GET-INSTALL-PATH
+            else
+              MODULES=all_modules
+              ARGS=$@
+            fi
+            ONE_SHOT_MAKEFILE=$M make -C $T -f build/core/main.mk $MODULES $ARGS
         fi
     fi
 }
@@ -760,6 +776,7 @@ function mmm()
         local MODULES=
         local ARGS=
         local DIR TO_CHOP
+        local GET_INSTALL_PATH=
         local DASH_ARGS=$(echo "$@" | awk -v RS=" " -v ORS=" " '/^-.*$/')
         local DIRS=$(echo "$@" | awk -v RS=" " -v ORS=" " '/^[^-].*$/')
         for DIR in $DIRS ; do
@@ -769,10 +786,10 @@ function mmm()
             fi
             DIR=`echo $DIR | sed -e 's/:.*//' -e 's:/$::'`
             if [ -f $DIR/Android.mk ]; then
-                TO_CHOP=`(\cd -P -- $T && pwd -P) | wc -c | tr -d ' '`
-                TO_CHOP=`expr $TO_CHOP + 1`
-                START=`PWD= /bin/pwd`
-                MFILE=`echo $START | cut -c${TO_CHOP}-`
+                local TO_CHOP=`(\cd -P -- $T && pwd -P) | wc -c | tr -d ' '`
+                local TO_CHOP=`expr $TO_CHOP + 1`
+                local START=`PWD= /bin/pwd`
+                local MFILE=`echo $START | cut -c${TO_CHOP}-`
                 if [ "$MFILE" = "" ] ; then
                     MFILE=$DIR/Android.mk
                 else
@@ -780,20 +797,17 @@ function mmm()
                 fi
                 MAKEFILE="$MAKEFILE $MFILE"
             else
-                if [ "$DIR" = snod ]; then
-                    ARGS="$ARGS snod"
-                elif [ "$DIR" = showcommands ]; then
-                    ARGS="$ARGS showcommands"
-                elif [ "$DIR" = dist ]; then
-                    ARGS="$ARGS dist"
-                elif [ "$DIR" = incrementaljavac ]; then
-                    ARGS="$ARGS incrementaljavac"
-                else
-                    echo "No Android.mk in $DIR."
-                    return 1
-                fi
+                case $DIR in
+                  showcommands | snod | dist | incrementaljavac) ARGS="$ARGS $DIR";;
+                  GET-INSTALL-PATH) GET_INSTALL_PATH=$DIR;;
+                  *) echo "No Android.mk in $DIR."; return 1;;
+                esac
             fi
         done
+        if [ -n "$GET_INSTALL_PATH" ]; then
+          ARGS=$GET_INSTALL_PATH
+          MODULES=
+        fi
         ONE_SHOT_MAKEFILE="$MAKEFILE" make -C $T -f build/core/main.mk $DASH_ARGS $MODULES $ARGS
     else
         echo "Couldn't locate the top of the tree.  Try setting TOP."
@@ -886,15 +900,50 @@ function cproj()
     echo "can't find Android.mk"
 }
 
+# simplified version of ps; output in the form
+# <pid> <procname>
+function qpid() {
+    local prepend=''
+    local append=''
+    if [ "$1" = "--exact" ]; then
+        prepend=' '
+        append='$'
+        shift
+    elif [ "$1" = "--help" -o "$1" = "-h" ]; then
+		echo "usage: qpid [[--exact] <process name|pid>"
+		return 255
+	fi
+
+    local EXE="$1"
+    if [ "$EXE" ] ; then
+		qpid | \grep "$prepend$EXE$append"
+	else
+		adb shell ps \
+			| tr -d '\r' \
+			| sed -e 1d -e 's/^[^ ]* *\([0-9]*\).* \([^ ]*\)$/\1 \2/'
+	fi
+}
+
 function pid()
 {
-   local EXE="$1"
-   if [ "$EXE" ] ; then
-       local PID=`adb shell ps | fgrep $1 | sed -e 's/[^ ]* *\([0-9]*\).*/\1/'`
-       echo "$PID"
-   else
-       echo "usage: pid name"
-   fi
+    local prepend=''
+    local append=''
+    if [ "$1" = "--exact" ]; then
+        prepend=' '
+        append='$'
+        shift
+    fi
+    local EXE="$1"
+    if [ "$EXE" ] ; then
+        local PID=`adb shell ps \
+            | tr -d '\r' \
+            | \grep "$prepend$EXE$append" \
+            | sed -e 's/^[^ ]* *\([0-9]*\).*$/\1/'`
+        echo "$PID"
+    else
+        echo "usage: pid [--exact] <process name>"
+		return 255
+    fi
 }
 
 # systemstack - dump the current stack trace of all threads in the system process
@@ -909,31 +958,45 @@ function stacks()
     if [[ $1 =~ ^[0-9]+$ ]] ; then
         local PID="$1"
     elif [ "$1" ] ; then
-        local PID=$(pid $1)
+        local PIDLIST="$(pid $1)"
+        if [[ $PIDLIST =~ ^[0-9]+$ ]] ; then
+            local PID="$PIDLIST"
+        elif [ "$PIDLIST" ] ; then
+            echo "more than one process: $1"
+        else
+            echo "no such process: $1"
+        fi
     else
         echo "usage: stacks [pid|process name]"
     fi
 
     if [ "$PID" ] ; then
-        local TRACES=/data/anr/traces.txt
-        local ORIG=/data/anr/traces.orig
-        local TMP=/data/anr/traces.tmp
+        # Determine whether the process is native
+        if adb shell ls -l /proc/$PID/exe | grep -q /system/bin/app_process ; then
+            # Dump stacks of Dalvik process
+            local TRACES=/data/anr/traces.txt
+            local ORIG=/data/anr/traces.orig
+            local TMP=/data/anr/traces.tmp
 
-        # Keep original traces to avoid clobbering
-        adb shell mv $TRACES $ORIG
+            # Keep original traces to avoid clobbering
+            adb shell mv $TRACES $ORIG
 
-        # Make sure we have a usable file
-        adb shell touch $TRACES
-        adb shell chmod 666 $TRACES
+            # Make sure we have a usable file
+            adb shell touch $TRACES
+            adb shell chmod 666 $TRACES
 
-        # Dump stacks and wait for dump to finish
-        adb shell kill -3 $PID
-        adb shell notify $TRACES
+            # Dump stacks and wait for dump to finish
+            adb shell kill -3 $PID
+            adb shell notify $TRACES >/dev/null
 
-        # Restore original stacks, and show current output
-        adb shell mv $TRACES $TMP
-        adb shell mv $ORIG $TRACES
-        adb shell cat $TMP | less -S
+            # Restore original stacks, and show current output
+            adb shell mv $TRACES $TMP
+            adb shell mv $ORIG $TRACES
+            adb shell cat $TMP
+        else
+            # Dump stacks of native process
+            adb shell debuggerd -b $PID
+        fi
     fi
 }
 
@@ -980,7 +1043,7 @@ function gdbclient()
                if [[ ! "$PID" =~ ^[0-9]+$ ]] ; then
                    # that likely didn't work because of returning multiple processes
                    # try again, filtering by root processes (don't contain colon)
-                   PID=`adb shell ps | grep $3 | grep -v ":" | awk '{print $2}'`
+                   PID=`adb shell ps | \grep $3 | \grep -v ":" | awk '{print $2}'`
                    if [[ ! "$PID" =~ ^[0-9]+$ ]]
                    then
                        echo "Couldn't resolve '$3' to single PID"
@@ -1006,6 +1069,7 @@ function gdbclient()
 
        echo >|"$OUT_ROOT/gdbclient.cmds" "set solib-absolute-prefix $OUT_SYMBOLS"
        echo >>"$OUT_ROOT/gdbclient.cmds" "set solib-search-path $OUT_SO_SYMBOLS:$OUT_SO_SYMBOLS/hw:$OUT_SO_SYMBOLS/ssl/engines:$OUT_SO_SYMBOLS/drm:$OUT_SO_SYMBOLS/egl:$OUT_SO_SYMBOLS/soundfx"
+       echo >>"$OUT_ROOT/gdbclient.cmds" "source $ANDROID_BUILD_TOP/development/scripts/gdb/dalvik.gdb"
        echo >>"$OUT_ROOT/gdbclient.cmds" "target remote $PORT"
        echo >>"$OUT_ROOT/gdbclient.cmds" ""
 
@@ -1041,6 +1105,12 @@ function jgrep()
 {
     find . -name .repo -prune -o -name .git -prune -o  -type f -name "*\.java" -print0 | xargs -0 grep --color -n "$@"
 }
+
+function mgrep()
+{
+    find . -name .repo -prune -o -name .git -prune -o  -type f -name "*\.mk" -print0 | xargs -0 grep --color -n "$@"
+}
+
 
 function cgrep()
 {
@@ -1172,7 +1242,7 @@ function runhat()
     fi
 
     # issue "am" command to cause the hprof dump
-    local sdcard=$(adb shell echo -n '$EXTERNAL_STORAGE')
+    local sdcard=$(adb ${adbOptions} shell echo -n '$EXTERNAL_STORAGE')
     local devFile=$sdcard/hprof-$targetPid
     #local devFile=/data/local/hprof-$targetPid
     echo "Poking $targetPid and waiting for data..."
@@ -1358,7 +1428,7 @@ function mka() {
 function mbot() {
     unset LUNCH_MENU_CHOICES
     croot
-    ./vendor/iokp/bot/deploy.sh
+    ./vendor/aokp/bot/deploy.sh
 }
 
 function mkapush() {
@@ -1461,11 +1531,28 @@ function taco() {
         breakfast $sauce
         if [ $? -eq 0 ]; then
             croot
-            ./vendor/iokp/bot/build_device.sh iokp_$sauce-userdebug $sauce
+            ./vendor/aokp/bot/build_device.sh aokp_$sauce-userdebug $sauce
         else
             echo "No such item in brunch menu. Try 'breakfast'"
         fi
     done
+}
+
+function addaosp() {
+    git remote rm aosp >/dev/null 2>&1
+    if [ ! -d .git ]; then
+        echo "Not a git repository."
+        exit -1
+    fi
+    REPO=`pwd`
+    REPO=${REPO##$ANDROID_BUILD_TOP/}
+    git remote add aosp https://android.googlesource.com/platform/"$REPO".git
+    if ( git remote -v | grep -qv aosp ) then
+        echo "AOSP $REPO remote created"
+    else
+        echo "Error creating remote"
+        exit -1
+    fi
 }
 
 function reposync() {
@@ -1517,7 +1604,8 @@ if [ "x$SHELL" != "x/bin/bash" ]; then
 fi
 
 # Execute the contents of any vendorsetup.sh files we can find.
-for f in `/bin/ls vendor/*/vendorsetup.sh vendor/*/*/vendorsetup.sh device/*/*/vendorsetup.sh 2> /dev/null`
+for f in `test -d device && find device -maxdepth 4 -name 'vendorsetup.sh' 2> /dev/null` \
+         `test -d vendor && find vendor -maxdepth 4 -name 'vendorsetup.sh' 2> /dev/null`
 do
     echo "including $f"
     . $f
@@ -1525,3 +1613,4 @@ done
 unset f
 
 addcompletions
+export ANDROID_BUILD_TOP=$(gettop)
